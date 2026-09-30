@@ -1,0 +1,70 @@
+# Blueprint de Render.
+#
+#   Render → New → Blueprint → apunta a este repositorio.
+#
+# La base de datos NO se declara aquí: vive en Neon. Hay que pegar sus dos
+# cadenas de conexión en el panel del servicio (quedan marcadas abajo con
+# `sync: false`, que es como Render indica «este valor lo pones tú y no se
+# guarda en el repositorio»).
+
+services:
+  - type: web
+    name: despensa
+    runtime: node
+    plan: starter
+    region: oregon
+    branch: main
+
+    buildCommand: npm ci && npm run build
+
+    # Las migraciones se aplican justo antes de servir: así el esquema nunca
+    # va por detrás del código que acaba de desplegarse.
+    startCommand: npm run db:migrate && npm start
+
+    healthCheckPath: /
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      - key: NODE_VERSION
+        value: "22"
+
+      # ── Base de datos (Neon) ──────────────────────────────────────────────
+      # DATABASE_URL          → cadena AGRUPADA, host con `-pooler`.
+      # DATABASE_URL_UNPOOLED → cadena DIRECTA, sólo para migraciones.
+      # Usar la agrupada para migrar provoca fallos intermitentes: PgBouncer en
+      # modo transacción no conserva el estado de sesión entre sentencias.
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_URL_UNPOOLED
+        sync: false
+
+      - key: DATABASE_SSL
+        value: "true"
+
+      # ── Seguridad ─────────────────────────────────────────────────────────
+      # Render genera un valor aleatorio la primera vez y lo conserva.
+      # Cambiarlo invalida todas las sesiones e invitaciones vigentes.
+      - key: AUTH_SECRET
+        generateValue: true
+
+      # URL pública del servicio, sin barra final. Se usa en los enlaces de los
+      # correos y para validar el origen de las peticiones.
+      - key: APP_URL
+        sync: false
+
+      - key: ALLOW_IFRAME_EMBEDDING
+        value: "false"
+
+      # ── Correo ────────────────────────────────────────────────────────────
+      # Sin SMTP_URL los mensajes sólo se escriben en el log: la recuperación de
+      # contraseña dejaría de funcionar para quien la necesite.
+      - key: SMTP_URL
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+
+      # ── Preferencias ──────────────────────────────────────────────────────
+      - key: DEFAULT_EXPIRY_WARNING_DAYS
+        value: "7"
