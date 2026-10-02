@@ -3,7 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { IconoAjustes, IconoLista, IconoPersonas, IconoDespensa } from "@/components/iconos";
+import {
+  IconoAjustes,
+  IconoCarrito,
+  IconoDespensa,
+  IconoLista,
+  IconoPersonas,
+} from "@/components/iconos";
 import { cx, Insignia } from "@/components/ui";
 import { ETIQUETA_ROL, type Rol } from "@/lib/catalogos";
 
@@ -20,6 +26,7 @@ export function NavDespensa({
   const pestanas = [
     { href: base, etiqueta: "Panel", icono: IconoDespensa, exacta: true },
     { href: `${base}/inventario`, etiqueta: "Inventario", icono: IconoLista },
+    { href: `${base}/reponer`, etiqueta: "Reponer", icono: IconoCarrito },
     { href: `${base}/miembros`, etiqueta: "Miembros", icono: IconoPersonas },
     { href: `${base}/ajustes`, etiqueta: "Ajustes", icono: IconoAjustes },
   ];

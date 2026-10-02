@@ -479,6 +479,92 @@ export async function articulosBajoMinimo(householdId: string, limite = 20) {
   }));
 }
 
+/* -------------------------------------------------------------------------- */
+/*                            Lista de reposición                              */
+/* -------------------------------------------------------------------------- */
+
+export type FilaReposicion = {
+  id: string;
+  nombre: string;
+  marca: string | null;
+  unit: Unidad;
+  total: number;
+  minQuantity: number;
+  categoria: string | null;
+  color: string | null;
+  ubicacionId: string | null;
+  ubicacion: string | null;
+  /** Sin existencia alguna, frente a "le queda menos del mínimo". */
+  agotado: boolean;
+  /** Cuándo se consumió lo último, para saber si hace falta reponerlo. */
+  ultimoMovimiento: Date | null;
+};
+
+/**
+ * Artículos que hay que reponer: agotados primero, luego los que han bajado
+ * de su mínimo.
+ *
+ * Se consulta aparte del inventario en lugar de filtrarlo porque las dos
+ * listas sirven para cosas distintas: una es "qué tengo", la otra es "qué
+ * falta". Mezclarlas obliga a traducir mentalmente de una a otra justo cuando
+ * estás en el supermercado.
+ */
+export async function listaDeReposicion(householdId: string): Promise<FilaReposicion[]> {
+  const db = await getDb();
+
+  const filas = await db
+    .select({
+      id: items.id,
+      nombre: items.name,
+      marca: items.brand,
+      unit: items.unit,
+      minQuantity: sql<string>`${items.minQuantity}::text`,
+      categoria: categories.name,
+      color: categories.color,
+      ubicacionId: items.defaultLocationId,
+      ubicacion: locations.name,
+      total: sql<string>`coalesce(sum(${itemBatches.quantity}) filter (where ${itemBatches.quantity} > 0), 0)::text`,
+      ultimoMovimiento: sql<Date | null>`(
+        select max(m.created_at) from stock_movements m where m.item_id = ${items.id}
+      )`,
+    })
+    .from(items)
+    .leftJoin(itemBatches, eq(itemBatches.itemId, items.id))
+    .leftJoin(categories, eq(categories.id, items.categoryId))
+    .leftJoin(locations, eq(locations.id, items.defaultLocationId))
+    .where(and(eq(items.householdId, householdId), isNull(items.archivedAt)))
+    .groupBy(items.id, categories.name, categories.color, locations.name)
+    .having(
+      sql`coalesce(sum(${itemBatches.quantity}) filter (where ${itemBatches.quantity} > 0), 0) <= 0
+          or (${items.minQuantity} > 0
+              and coalesce(sum(${itemBatches.quantity}) filter (where ${itemBatches.quantity} > 0), 0) < ${items.minQuantity})`,
+    );
+
+  return filas
+    .map((f) => {
+      const total = Number(f.total);
+      return {
+        id: f.id,
+        nombre: f.nombre,
+        marca: f.marca,
+        unit: f.unit,
+        total,
+        minQuantity: Number(f.minQuantity),
+        categoria: f.categoria,
+        color: f.color,
+        ubicacionId: f.ubicacionId,
+        ubicacion: f.ubicacion,
+        agotado: total <= 0,
+        ultimoMovimiento: f.ultimoMovimiento ? new Date(f.ultimoMovimiento) : null,
+      };
+    })
+    .sort((a, b) => {
+      // Primero lo que no queda nada, luego por nombre.
+      if (a.agotado !== b.agotado) return a.agotado ? -1 : 1;
+      return a.nombre.localeCompare(b.nombre, "es");
+    });
+}
+
 export async function movimientosRecientes(householdId: string, limite = 15) {
   const db = await getDb();
   const filas = await db

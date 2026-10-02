@@ -227,6 +227,14 @@ export async function eliminarArticulo(_prev: EstadoFormulario, fd: FormData): P
   const itemId = String(fd.get("itemId") ?? "");
   if (!householdId || !itemId) return fallo("Faltan datos.");
 
+  /**
+   * Desde la ficha del artículo hay que salir de ella, porque deja de
+   * existir; desde una lista conviene quedarse donde estabas. Es un valor
+   * cerrado y no una URL: un destino libre en un formulario sería una
+   * redirección abierta de manual.
+   */
+  const quedarse = fd.get("destino") === "lista";
+
   try {
     const ctx = await contextoAccion(householdId, "member");
     const db = await getDb();
@@ -244,13 +252,16 @@ export async function eliminarArticulo(_prev: EstadoFormulario, fd: FormData): P
       householdId,
       metadata: { nombre: borrados[0].name },
     });
+
+    revalidatePath(`/despensas/${householdId}`, "layout");
+
+    if (quedarse) return exito(`«${borrados[0].name}» se eliminó del inventario.`);
   } catch (err) {
     const r = respuestaDeError(err);
     if (r) return r;
     throw err;
   }
 
-  revalidatePath(`/despensas/${householdId}`, "layout");
   redirect(`/despensas/${householdId}/inventario?eliminado=1`);
 }
 

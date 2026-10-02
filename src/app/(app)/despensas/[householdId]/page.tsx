@@ -81,7 +81,7 @@ export default async function PanelDespensa({
           detalle={`${resumen.sinStock} agotados · ${resumen.bajoMinimo} bajo mínimo`}
           tono={resumen.bajoMinimo + resumen.sinStock > 0 ? "aviso" : "exito"}
           icono={<IconoCarrito className="size-4" />}
-          href={`${base}/inventario?estado=bajo_minimo`}
+          href={`${base}/reponer`}
         />
       </div>
 
@@ -141,6 +141,14 @@ export default async function PanelDespensa({
           <Seccion
             titulo="Hay que reponer"
             descripcion="Artículos por debajo de su mínimo"
+            acciones={
+              <Link
+                href={`${base}/reponer`}
+                className="text-sm font-medium text-marca-700 hover:underline dark:text-marca-400"
+              >
+                Ver lista
+              </Link>
+            }
           >
             {bajoMinimo.length === 0 ? (
               <p className="py-2 text-sm text-slate-500 dark:text-slate-400">

@@ -53,8 +53,8 @@ class Cliente {
     /** Simula `x-forwarded-host`, como haría un proxy delante de la app. */
     this.host = host;
     this.cookies = new Map();
-    /** Última cabecera Set-Cookie de sesión, para poder inspeccionarla. */
-    this.ultimaCookieCruda = null;
+    /** Cabeceras Set-Cookie de sesión del último POST, para inspeccionarlas. */
+    this.cookiesEmitidas = [];
   }
 
   #cabeceraCookie() {
@@ -63,7 +63,7 @@ class Cliente {
 
   #guardarCookies(res) {
     for (const linea of res.headers.getSetCookie?.() ?? []) {
-      if (linea.includes("despensa_sesion")) this.ultimaCookieCruda = linea;
+      if (linea.includes("despensa_sesion")) this.cookiesEmitidas.push(linea);
       const [par] = linea.split(";");
       const i = par.indexOf("=");
       const nombre = par.slice(0, i).trim();
@@ -74,6 +74,7 @@ class Cliente {
   }
 
   async pedir(ruta, opciones = {}, saltos = 0) {
+    if (saltos === 0 && opciones.method === "POST") this.cookiesEmitidas = [];
     const cabeceras = {
       "user-agent": "prueba-humo/1.0",
       "x-forwarded-for": this.ip,
@@ -467,6 +468,95 @@ async function main() {
     }
   }
 
+  /* 11c · Lista de reposición ----------------------------------------------- */
+  seccion("11c · Lista de agotados y reposición");
+  if (hid2) {
+    const formNuevo = Cliente.formularioCon(
+      (await ana.get(`/despensas/${hid2}/inventario/nuevo`)).body,
+      "name",
+      "quantity",
+    );
+
+    /** Alta sin existencia: nace agotado, que es justo lo que queremos listar. */
+    const altaVacia = async (nombre, minimo) =>
+      ana.accion(`/despensas/${hid2}/inventario/nuevo`, {
+        ...formNuevo,
+        householdId: hid2,
+        name: nombre,
+        brand: "",
+        barcode: "",
+        categoryId: "",
+        locationId: "",
+        unit: "unidad",
+        minQuantity: String(minimo),
+        perishable: "true",
+        notes: "",
+        quantity: "0",
+        expiresAt: "",
+        expiryType: "caducidad",
+        purchasedAt: "",
+        price: "",
+      });
+
+    if (formNuevo) {
+      await altaVacia("Sal de prueba", 3);
+      await altaVacia("Descartable de prueba", 1);
+
+      let lista = await ana.get(`/despensas/${hid2}/reponer`);
+      check("la lista de reposición carga", lista.status === 200, `status ${lista.status}`);
+      check("un artículo sin existencia sale como agotado", lista.body.includes("Sal de prueba"));
+      check("la sección de agotados cuenta bien", /Agotados \(2\)/.test(lista.body));
+
+      // Reponer desde la propia lista, sin entrar en la ficha.
+      const fRep = Cliente.formularioCon(lista.body, "itemId", "quantity", "expiresAt");
+      check("cada fila trae su formulario de reposición", Boolean(fRep));
+
+      if (fRep) {
+        const itemSal = lista.body
+          .split("Sal de prueba")[1]
+          ?.match(/name="itemId" value="([0-9a-f-]{36})"/)?.[1];
+
+        await ana.accion(`/despensas/${hid2}/reponer`, {
+          ...fRep,
+          householdId: hid2,
+          itemId: itemSal,
+          quantity: "5",
+          expiresAt: "",
+          expiryType: "caducidad",
+          locationId: "",
+        });
+
+        lista = await ana.get(`/despensas/${hid2}/reponer`);
+        check("tras reponer, el artículo abandona la lista", !lista.body.includes("Sal de prueba"));
+
+        const inv = await ana.get(`/despensas/${hid2}/inventario`);
+        check("y aparece con existencia en el inventario", /Sal de prueba/.test(inv.body));
+      }
+
+      // Eliminar desde la lista: no debe sacarte de la página.
+      lista = await ana.get(`/despensas/${hid2}/reponer`);
+      const fDesc = Cliente.formularioCon(lista.body, "itemId", "destino");
+      check("cada fila trae su botón de eliminar", Boolean(fDesc));
+
+      if (fDesc) {
+        const itemDesc = lista.body
+          .split("Descartable de prueba")[1]
+          ?.match(/name="itemId" value="([0-9a-f-]{36})"/)?.[1];
+
+        const r = await ana.accion(`/despensas/${hid2}/reponer`, {
+          ...fDesc,
+          householdId: hid2,
+          itemId: itemDesc,
+          destino: "lista",
+        });
+        check("eliminar desde la lista confirma sin redirigir al inventario", r.body.includes("se eliminó"));
+
+        lista = await ana.get(`/despensas/${hid2}/reponer`);
+        check("y el artículo desaparece", !lista.body.includes("Descartable de prueba"));
+      }
+    }
+  }
+
   /* 12 · Cuotas de intentos -------------------------------------------------- */
   seccion("12 · Límite de intentos");
   const ipAtacante = `203.0.113.${1 + Math.floor(Math.random() * 250)}`;
@@ -532,28 +622,35 @@ async function main() {
    */
   const local = new Cliente("local", `198.51.100.${1 + Math.floor(Math.random() * 250)}`);
   await entrar(local, "ana@ejemplo.com", CLAVE_DEMO);
-  const cookieLocal = local.ultimaCookieCruda ?? "";
-  check("en localhost la cookie es Lax y sin Secure",
-    /SameSite=lax/i.test(cookieLocal) && !/;\s*Secure/i.test(cookieLocal), cookieLocal);
-  check("y siempre HttpOnly", /HttpOnly/i.test(cookieLocal), cookieLocal);
+  const emitidas = local.cookiesEmitidas;
 
-  const tunel = new Cliente(
-    "vista-previa",
-    `198.51.100.${1 + Math.floor(Math.random() * 250)}`,
-    "3000-pruebadehumo.e2b.app",
-  );
-  await entrar(tunel, "ana@ejemplo.com", CLAVE_DEMO);
-  const cookieTunel = tunel.ultimaCookieCruda ?? "";
-  check("tras un proxy la cookie es SameSite=None", /SameSite=none/i.test(cookieTunel), cookieTunel);
-  check("…con Secure", /;\s*Secure/i.test(cookieTunel), cookieTunel);
-  check("…y Partitioned, para que Chrome la acepte en un iframe",
-    /Partitioned/i.test(cookieTunel), cookieTunel);
+  const directa = emitidas.find((c) => c.startsWith("despensa_sesion=")) ?? "";
+  const empotrada = emitidas.find((c) => c.startsWith("despensa_sesion_emb=")) ?? "";
 
-  const tras1 = await tunel.get("/despensas");
-  const tras2 = await tunel.get("/cuenta");
-  check("la sesión sobrevive a varias navegaciones tras el proxy",
-    tras1.body.includes("Mis despensas") && tras2.body.includes("Sesiones activas"),
-    `${tras1.status}/${tras2.status}`);
+  check("se emite la variante directa", Boolean(directa), emitidas.join(" | "));
+  check("…Lax y sin Secure, válida sobre http en local",
+    /SameSite=lax/i.test(directa) && !/;\s*Secure/i.test(directa), directa);
+
+  check("se emite la variante empotrada", Boolean(empotrada), emitidas.join(" | "));
+  check("…SameSite=None con Secure", /SameSite=none/i.test(empotrada) && /;\s*Secure/i.test(empotrada), empotrada);
+  check("…y Partitioned, para que Chrome la acepte dentro de un iframe",
+    /Partitioned/i.test(empotrada), empotrada);
+
+  check("ambas son HttpOnly", /HttpOnly/i.test(directa) && /HttpOnly/i.test(empotrada));
+  check("ambas llevan el mismo token",
+    directa.split(";")[0].split("=")[1] === empotrada.split(";")[0].split("=")[1]);
+
+  /**
+   * El caso que fallaba: dentro de un iframe de otro dominio el navegador
+   * sólo devuelve la cookie particionada. La sesión tiene que seguir en pie.
+   */
+  const soloEmb = empotrada.split(";")[0];
+  const iframe = new Cliente("iframe", `198.51.100.${1 + Math.floor(Math.random() * 250)}`, "3000-prueba.e2b.app");
+  const r1 = await iframe.pedir("/despensas", { headers: { cookie: soloEmb } });
+  const r2 = await iframe.pedir("/cuenta", { headers: { cookie: soloEmb } });
+  check("con sólo la cookie particionada la sesión se mantiene",
+    r1.body.includes("Mis despensas") && r2.body.includes("Sesiones activas"),
+    `${r1.status}/${r2.status}`);
 
   /* 15 · Escrituras sin acceso: mensaje, no pantalla de error ---------------- */
   seccion("15 · Escritura sobre una despensa ajena");

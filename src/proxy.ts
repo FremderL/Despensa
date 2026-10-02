@@ -27,7 +27,11 @@ const RUTAS_PRIVADAS = [/^\/despensas(\/|$)/, /^\/cuenta(\/|$)/];
 /** Rutas de autenticación: si ya hay sesión, sobran. */
 const RUTAS_PUBLICAS_AUTH = [/^\/ingresar$/, /^\/registro$/];
 
-const COOKIES_SESION = ["__Host-despensa_sesion", "despensa_sesion"];
+/**
+ * Fuera de producción se emiten dos variantes de la cookie (ver
+ * `lib/session.ts`); aquí basta con que llegue cualquiera de ellas.
+ */
+const COOKIES_SESION = ["__Host-despensa_sesion", "despensa_sesion", "despensa_sesion_emb"];
 
 function tieneCookieSesion(req: NextRequest): boolean {
   return COOKIES_SESION.some((n) => Boolean(req.cookies.get(n)?.value));

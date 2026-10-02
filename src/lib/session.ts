@@ -1,7 +1,7 @@
 import "server-only";
 
 import { and, desc, eq, gt, isNull, lt, ne, type SQL } from "drizzle-orm";
-import { cookies, headers } from "next/headers";
+import { cookies } from "next/headers";
 
 import { getDb, sessions, users } from "@/db";
 import { generateToken, hashToken, newId } from "@/lib/crypto";
@@ -25,90 +25,70 @@ const INACTIVIDAD_MS = 7 * 24 * 60 * 60 * 1000; // 7 días
 const REFRESCO_MS = 10 * 60 * 1000; // 10 minutos
 
 /**
- * El prefijo `__Host-` es una garantía que impone el navegador: sólo acepta
- * la cookie si viene con Secure, Path=/ y sin atributo Domain. Impide que un
- * subdominio comprometido plante una cookie de sesión. Requiere HTTPS, así
- * que en desarrollo usamos el nombre sin prefijo.
+ * Nombres de la cookie de sesión.
+ *
+ * En producción hay UNA sola, con prefijo `__Host-`: una garantía que impone
+ * el navegador, porque sólo la acepta con Secure, Path=/ y sin atributo
+ * Domain. Eso impide que un subdominio comprometido plante una sesión.
+ *
+ * Fuera de producción se emiten DOS, con el mismo token y atributos
+ * distintos. No es elegancia, es pragmatismo: la aplicación puede servirse
+ * por `http://localhost` o a través de un proxy HTTPS que la muestra
+ * empotrada en otro dominio, y cada caso exige atributos incompatibles entre
+ * sí (`Secure` rompe el primero, su ausencia rompe el segundo). Averiguar en
+ * cuál estamos depende de cabeceras que el propio servidor de desarrollo de
+ * Next reescribe, así que en lugar de adivinar se ponen las dos y se usa la
+ * que el navegador haya aceptado.
  */
-export const NOMBRE_COOKIE = env.isProd ? "__Host-despensa_sesion" : "despensa_sesion";
+const COOKIE_DIRECTA = "despensa_sesion";
+const COOKIE_EMPOTRADA = "despensa_sesion_emb";
+
+export const NOMBRE_COOKIE = env.isProd ? `__Host-${COOKIE_DIRECTA}` : COOKIE_DIRECTA;
+
+/** Todos los nombres posibles, del más específico al más general. */
+export const NOMBRES_COOKIE = env.isProd
+  ? [NOMBRE_COOKIE]
+  : [COOKIE_DIRECTA, COOKIE_EMPOTRADA];
+
+type Atributos = {
+  httpOnly: true;
+  secure: boolean;
+  sameSite: "lax" | "none";
+  partitioned?: true;
+  path: "/";
+};
 
 /**
- * Averigua cómo debe emitirse la cookie para que el navegador la acepte.
+ * Atributos de cada variante.
  *
- * No es un detalle menor: si los atributos no encajan con el contexto, el
- * navegador descarta la cookie en silencio, sin ningún error en el servidor,
- * y la sesión parece "perderse" en cada navegación.
- *
- * Tres escenarios y lo que exige cada uno:
- *
- *   1. `http://localhost` en desarrollo → `Secure` haría que se descartase y
- *      `SameSite=None` sin `Secure` es inválido. Toca `Lax` sin `Secure`.
- *   2. Vista previa por HTTPS dentro de un iframe de otro dominio → con `Lax`
- *      la cookie no viaja, porque el sitio de nivel superior no es el nuestro.
- *      Hacen falta `None` + `Secure`, y además `Partitioned`, que es lo que
- *      permite a Chrome aceptarla pese al bloqueo de cookies de terceros: la
- *      guarda aislada por sitio contenedor.
- *   3. Producción en su propio dominio → `Lax`, lo más estricto que sigue
- *      funcionando, y sin depender de cookies de terceros.
+ * - directa: `Lax` sin `Secure`. Válida sobre http en local y en cualquier
+ *   navegación de primer nivel.
+ * - empotrada: `None` + `Secure` + `Partitioned`. Es la única combinación que
+ *   un navegador acepta dentro de un iframe de otro dominio; `Partitioned`
+ *   (CHIPS) es lo que la salva del bloqueo de cookies de terceros, a cambio
+ *   de quedar aislada por sitio contenedor.
  */
-async function contextoCookie(): Promise<{ https: boolean; empotrada: boolean }> {
+function atributos(variante: "directa" | "empotrada"): Atributos {
+  if (variante === "empotrada") {
+    return { httpOnly: true, secure: true, sameSite: "none", partitioned: true, path: "/" };
+  }
+  return { httpOnly: true, secure: env.isProd, sameSite: "lax", path: "/" };
+}
+
+/** Qué cookies hay que emitir en este despliegue. */
+function variantes(): Array<{ nombre: string; attrs: Atributos }> {
   if (env.isProd) {
-    // Render termina TLS por nosotros; el tráfico hasta el usuario es HTTPS.
-    return { https: true, empotrada: env.ALLOW_IFRAME_EMBEDDING };
+    // `__Host-` exige Secure; si además se permite empotrar, hace falta None.
+    const attrs: Atributos = env.ALLOW_IFRAME_EMBEDDING
+      ? { httpOnly: true, secure: true, sameSite: "none", partitioned: true, path: "/" }
+      : { httpOnly: true, secure: true, sameSite: "lax", path: "/" };
+    return [{ nombre: NOMBRE_COOKIE, attrs }];
   }
 
-  const h = await headers();
-  const proto = h.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
-  const host = (h.get("x-forwarded-host") ?? h.get("host") ?? "").split(",")[0]!.trim();
-  const esLocal = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?$/i.test(host);
-
-  /**
-   * `x-forwarded-proto` sólo sirve como señal POSITIVA.
-   *
-   * El servidor de desarrollo de Next escribe esa cabecera con el protocolo
-   * del transporte local, que es `http` incluso cuando un proxy delante
-   * terminó TLS. Fiarse de ella para descartar HTTPS dejaba la cookie mal
-   * configurada justo en la vista previa, que es donde se usa la aplicación.
-   *
-   * El anfitrión sí distingue: cualquier nombre que no sea local ha llegado
-   * a través del proxy, y ese proxy sirve por HTTPS.
-   */
-  const https = proto === "https" || (!esLocal && host !== "");
-
-  // Fuera de producción, HTTPS implica que venimos del proxy de vista previa,
-  // que muestra la aplicación empotrada en otro sitio.
-  return { https, empotrada: https };
-}
-
-async function opcionesCookie(expira: Date) {
-  const { https, empotrada } = await contextoCookie();
-
-  return {
-    // Invisible para JavaScript: un XSS no puede leer la sesión.
-    httpOnly: true,
-    secure: https,
-    sameSite: empotrada ? ("none" as const) : ("lax" as const),
-    // `Partitioned` sólo es válido junto a SameSite=None y Secure.
-    partitioned: empotrada ? true : undefined,
-    path: "/",
-    expires: expira,
-  };
-}
-
-/**
- * Al borrar hay que repetir exactamente los mismos atributos: una cookie
- * emitida como `Partitioned` no se elimina con un borrado sin ese atributo.
- */
-async function opcionesBorrado() {
-  const { https, empotrada } = await contextoCookie();
-  return {
-    httpOnly: true,
-    secure: https,
-    sameSite: empotrada ? ("none" as const) : ("lax" as const),
-    partitioned: empotrada ? true : undefined,
-    path: "/",
-    maxAge: 0,
-  };
+  return [
+    { nombre: COOKIE_DIRECTA, attrs: atributos("directa") },
+    { nombre: COOKIE_EMPOTRADA, attrs: atributos("empotrada") },
+  ];
 }
 
 export type SesionActiva = {
@@ -141,7 +121,9 @@ export async function crearSesion(userId: string): Promise<void> {
   });
 
   const store = await cookies();
-  store.set(NOMBRE_COOKIE, token, await opcionesCookie(expira));
+  for (const { nombre, attrs } of variantes()) {
+    store.set(nombre, token, { ...attrs, expires: expira });
+  }
 }
 
 /**
@@ -152,7 +134,12 @@ export async function crearSesion(userId: string): Promise<void> {
  */
 export async function sesionActual(): Promise<SesionActiva | null> {
   const store = await cookies();
-  const token = store.get(NOMBRE_COOKIE)?.value;
+  // Se acepta cualquiera de las variantes: todas llevan el mismo token.
+  let token: string | undefined;
+  for (const nombre of NOMBRES_COOKIE) {
+    token = store.get(nombre)?.value;
+    if (token) break;
+  }
   if (!token) return null;
 
   const db = await getDb();
@@ -207,8 +194,21 @@ export async function sesionActual(): Promise<SesionActiva | null> {
 /** Cierra la sesión actual y borra la cookie. */
 export async function cerrarSesion(): Promise<string | null> {
   const store = await cookies();
-  const token = store.get(NOMBRE_COOKIE)?.value;
-  store.set(NOMBRE_COOKIE, "", await opcionesBorrado());
+
+  let token: string | undefined;
+  for (const nombre of NOMBRES_COOKIE) {
+    token ??= store.get(nombre)?.value;
+  }
+
+  /**
+   * El borrado repite los mismos atributos con que se emitió cada cookie:
+   * una emitida como `Partitioned` no se elimina con un borrado que no lo
+   * lleve, y quedaría viva en el navegador.
+   */
+  for (const { nombre, attrs } of variantes()) {
+    store.set(nombre, "", { ...attrs, maxAge: 0 });
+  }
+
   if (!token) return null;
 
   const db = await getDb();

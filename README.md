@@ -50,7 +50,7 @@ funcionando desde el primer momento.
 | `npm run seed`        | Datos de ejemplo                                            |
 | `npm run typecheck`   | TypeScript sin emitir                                       |
 | `npm run lint`        | ESLint                                                      |
-| `npm run prueba:humo` | Prueba end-to-end contra la instancia en marcha (71 checks) |
+| `npm run prueba:humo` | Prueba end-to-end contra la instancia en marcha (82 checks) |
 
 ---
 
@@ -60,7 +60,8 @@ funcionando desde el primer momento.
 src/
 ├── app/
 │   ├── (auth)/          ingresar · registro · recuperar · restablecer · verificar
-│   ├── (app)/           zona con sesión: despensas, inventario, miembros, cuenta
+│   ├── (app)/           zona con sesión: despensas, inventario, reponer,
+│   │                    miembros, ajustes y cuenta
 │   ├── actions/         server actions: auth, despensas, miembros, inventario
 │   └── invitacion/      canje del enlace de invitación
 ├── components/          interfaz (los formularios son clientes; el resto, servidor)
@@ -78,6 +79,12 @@ de red, dos despliegues y un CORS que configurar mal.
 **Lotes, no cantidades sueltas.** Un artículo («Leche») agrupa varios lotes, y cada
 lote tiene su propia fecha. Es lo que permite decir *«caduca el cartón del martes»*
 en vez de inventar una fecha única para todas las existencias.
+
+**Inventario y lista de la compra, separados.** «Qué tengo» y «qué falta» son
+dos preguntas distintas, y mezclarlas en una sola pantalla con un filtro obliga
+a traducir mentalmente de una a otra justo cuando estás en el supermercado. La
+pestaña **Reponer** agrupa lo agotado y lo que bajó del mínimo, y permite
+reponer o descartar sin entrar en cada ficha.
 
 **Fechas civiles, no instantes.** Las caducidades se guardan como `date`, sin hora
 ni zona. Con un `timestamp`, un yogur que caduca hoy aparecería como vencido a
@@ -126,13 +133,14 @@ hace y por qué.
 - Cookie `HttpOnly`, `Secure` y `SameSite`, con prefijo `__Host-` en producción
   (el navegador entonces sólo la acepta con HTTPS, `Path=/` y sin `Domain`, lo que
   impide que un subdominio comprometido plante una sesión).
-- Los atributos se ajustan al contexto, porque si no encajan el navegador
-  descarta la cookie **en silencio** y la sesión parece perderse en cada clic:
-  `Lax` sin `Secure` en `http://localhost`; `None` + `Secure` + `Partitioned`
-  cuando la app se sirve tras un proxy HTTPS y se ve empotrada; `Lax` en
-  producción sobre su propio dominio. El protocolo se deduce del anfitrión y no
-  de `x-forwarded-proto`, que el servidor de desarrollo de Next reescribe con
-  el del transporte local.
+- Si los atributos no encajan con el contexto, el navegador descarta la cookie
+  **en silencio** y la sesión parece perderse en cada clic. En producción hay
+  una sola cookie, `__Host-` con `Lax`. Fuera de producción se emiten **dos**
+  con el mismo token —`Lax` sin `Secure` para `http://localhost`, y
+  `None` + `Secure` + `Partitioned` para cuando la app se ve empotrada tras un
+  proxy HTTPS— y se acepta la que el navegador haya guardado. No es elegante,
+  pero evita depender de adivinar el contexto a partir de cabeceras que el
+  propio servidor de desarrollo de Next reescribe.
 - Caducidad **absoluta** de 30 días e **inactividad** de 7. Cambiar la contraseña
   cierra todas las demás sesiones, y la pantalla de cuenta permite cerrarlas una a
   una.
