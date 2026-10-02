@@ -14,7 +14,7 @@ import {
 } from "@/db";
 import { ACCIONES, auditar } from "@/lib/audit";
 import { exito, fallo, valoresSeguros, type EstadoFormulario } from "@/lib/acciones";
-import { contarPropietarios, ErrorAutorizacion, requireMiembro, requireUsuario } from "@/lib/authz";
+import { contarPropietarios, contextoAccion, respuestaDeError, usuarioAccion } from "@/lib/authz";
 import { newId } from "@/lib/crypto";
 import { CATEGORIAS_INICIALES, UBICACIONES_INICIALES } from "@/lib/defaults";
 import { CUOTAS, consumirCuota } from "@/lib/rate-limit";
@@ -55,7 +55,7 @@ async function sembrarDespensa(tx: Db, householdId: string) {
 }
 
 export async function crearDespensa(_prev: EstadoFormulario, fd: FormData): Promise<EstadoFormulario> {
-  const sesion = await requireUsuario();
+  const sesion = await usuarioAccion();
 
   const datos = despensaSchema.safeParse(formToObject(fd));
   if (!datos.success) return fallo("Revisa el nombre.", erroresDeZod(datos.error), valoresSeguros(fd));
@@ -103,7 +103,7 @@ export async function actualizarAjustes(_prev: EstadoFormulario, fd: FormData): 
   if (!datos.success) return fallo("Revisa los datos.", erroresDeZod(datos.error), valoresSeguros(fd));
 
   try {
-    const ctx = await requireMiembro(datos.data.householdId, "admin");
+    const ctx = await contextoAccion(datos.data.householdId, "admin");
     const db = await getDb();
 
     await db
@@ -124,7 +124,8 @@ export async function actualizarAjustes(_prev: EstadoFormulario, fd: FormData): 
     revalidatePath(`/despensas/${datos.data.householdId}`, "layout");
     return exito("Ajustes guardados.");
   } catch (err) {
-    if (err instanceof ErrorAutorizacion) return fallo(err.message);
+    const r = respuestaDeError(err);
+    if (r) return r;
     throw err;
   }
 }
@@ -137,7 +138,7 @@ export async function eliminarDespensa(_prev: EstadoFormulario, fd: FormData): P
 
   let nombre = "";
   try {
-    const ctx = await requireMiembro(householdId, "owner");
+    const ctx = await contextoAccion(householdId, "owner");
     nombre = ctx.despensa.name;
 
     /**
@@ -159,7 +160,8 @@ export async function eliminarDespensa(_prev: EstadoFormulario, fd: FormData): P
       metadata: { householdId, nombre },
     });
   } catch (err) {
-    if (err instanceof ErrorAutorizacion) return fallo(err.message);
+    const r = respuestaDeError(err);
+    if (r) return r;
     throw err;
   }
 
@@ -172,7 +174,7 @@ export async function salirDeDespensa(_prev: EstadoFormulario, fd: FormData): Pr
   if (!householdId) return fallo("Falta la despensa.");
 
   try {
-    const ctx = await requireMiembro(householdId, "viewer");
+    const ctx = await contextoAccion(householdId, "viewer");
 
     if (ctx.rol === "owner" && (await contarPropietarios(householdId)) === 1) {
       return fallo(
@@ -187,7 +189,8 @@ export async function salirDeDespensa(_prev: EstadoFormulario, fd: FormData): Pr
 
     await auditar({ action: ACCIONES.miembroSalio, userId: ctx.sesion.user.id, householdId });
   } catch (err) {
-    if (err instanceof ErrorAutorizacion) return fallo(err.message);
+    const r = respuestaDeError(err);
+    if (r) return r;
     throw err;
   }
 
@@ -202,7 +205,7 @@ export async function crearCategoria(_prev: EstadoFormulario, fd: FormData): Pro
   if (!datos.success) return fallo("Revisa los datos.", erroresDeZod(datos.error), valoresSeguros(fd));
 
   try {
-    const ctx = await requireMiembro(datos.data.householdId, "admin");
+    const ctx = await contextoAccion(datos.data.householdId, "admin");
     const cuota = await consumirCuota(`escritura:${ctx.sesion.user.id}`, CUOTAS.escrituraPorUsuario);
     if (!cuota.permitido) return fallo("Vas demasiado rápido. Espera un momento.");
 
@@ -226,8 +229,9 @@ export async function crearCategoria(_prev: EstadoFormulario, fd: FormData): Pro
     revalidatePath(`/despensas/${datos.data.householdId}/ajustes`);
     return exito("Categoría creada.");
   } catch (err) {
-    if (err instanceof ErrorAutorizacion) return fallo(err.message);
     if (esConflictoUnico(err)) return fallo("Ya existe una categoría con ese nombre.");
+    const r = respuestaDeError(err);
+    if (r) return r;
     throw err;
   }
 }
@@ -238,7 +242,7 @@ export async function eliminarCategoria(_prev: EstadoFormulario, fd: FormData): 
   if (!householdId || !id) return fallo("Faltan datos.");
 
   try {
-    await requireMiembro(householdId, "admin");
+    await contextoAccion(householdId, "admin");
     const db = await getDb();
 
     // El `where` incluye householdId: impide borrar la categoría de otra casa.
@@ -252,7 +256,8 @@ export async function eliminarCategoria(_prev: EstadoFormulario, fd: FormData): 
     revalidatePath(`/despensas/${householdId}`, "layout");
     return exito("Categoría eliminada. Los artículos que la usaban quedaron sin categoría.");
   } catch (err) {
-    if (err instanceof ErrorAutorizacion) return fallo(err.message);
+    const r = respuestaDeError(err);
+    if (r) return r;
     throw err;
   }
 }
@@ -264,7 +269,7 @@ export async function crearUbicacion(_prev: EstadoFormulario, fd: FormData): Pro
   if (!datos.success) return fallo("Revisa los datos.", erroresDeZod(datos.error), valoresSeguros(fd));
 
   try {
-    const ctx = await requireMiembro(datos.data.householdId, "admin");
+    const ctx = await contextoAccion(datos.data.householdId, "admin");
     const cuota = await consumirCuota(`escritura:${ctx.sesion.user.id}`, CUOTAS.escrituraPorUsuario);
     if (!cuota.permitido) return fallo("Vas demasiado rápido. Espera un momento.");
 
@@ -287,8 +292,9 @@ export async function crearUbicacion(_prev: EstadoFormulario, fd: FormData): Pro
     revalidatePath(`/despensas/${datos.data.householdId}/ajustes`);
     return exito("Ubicación creada.");
   } catch (err) {
-    if (err instanceof ErrorAutorizacion) return fallo(err.message);
     if (esConflictoUnico(err)) return fallo("Ya existe una ubicación con ese nombre.");
+    const r = respuestaDeError(err);
+    if (r) return r;
     throw err;
   }
 }
@@ -299,7 +305,7 @@ export async function eliminarUbicacion(_prev: EstadoFormulario, fd: FormData): 
   if (!householdId || !id) return fallo("Faltan datos.");
 
   try {
-    await requireMiembro(householdId, "admin");
+    await contextoAccion(householdId, "admin");
     const db = await getDb();
 
     const borradas = await db
@@ -312,7 +318,8 @@ export async function eliminarUbicacion(_prev: EstadoFormulario, fd: FormData): 
     revalidatePath(`/despensas/${householdId}`, "layout");
     return exito("Ubicación eliminada.");
   } catch (err) {
-    if (err instanceof ErrorAutorizacion) return fallo(err.message);
+    const r = respuestaDeError(err);
+    if (r) return r;
     throw err;
   }
 }

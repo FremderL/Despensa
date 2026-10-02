@@ -10,12 +10,12 @@ import { ACCIONES, auditar } from "@/lib/audit";
 import { exito, fallo, valoresSeguros, type EstadoFormulario } from "@/lib/acciones";
 import {
   contarPropietarios,
-  ErrorAutorizacion,
+  contextoAccion,
   ETIQUETA_ROL,
   JERARQUIA,
   miembroOpcional,
-  requireMiembro,
-  requireUsuario,
+  respuestaDeError,
+  usuarioAccion,
 } from "@/lib/authz";
 import { generateToken, hashToken, newId } from "@/lib/crypto";
 import { correoInvitacion, enviarCorreo } from "@/lib/mailer";
@@ -36,7 +36,7 @@ export async function crearInvitacion(_prev: EstadoFormulario, fd: FormData): Pr
   if (!datos.success) return fallo("Revisa los datos.", erroresDeZod(datos.error), valoresSeguros(fd));
 
   try {
-    const ctx = await requireMiembro(datos.data.householdId, "admin");
+    const ctx = await contextoAccion(datos.data.householdId, "admin");
 
     /**
      * Sólo se puede invitar con el correo confirmado. Sin esta regla, quien se
@@ -131,7 +131,8 @@ export async function crearInvitacion(_prev: EstadoFormulario, fd: FormData): Pr
       { enlaceDesarrollo: enlace },
     );
   } catch (err) {
-    if (err instanceof ErrorAutorizacion) return fallo(err.message);
+    const r = respuestaDeError(err);
+    if (r) return r;
     throw err;
   }
 }
@@ -142,7 +143,7 @@ export async function revocarInvitacion(_prev: EstadoFormulario, fd: FormData): 
   if (!householdId || !id) return fallo("Faltan datos.");
 
   try {
-    const ctx = await requireMiembro(householdId, "admin");
+    const ctx = await contextoAccion(householdId, "admin");
     const db = await getDb();
 
     const filas = await db
@@ -165,7 +166,8 @@ export async function revocarInvitacion(_prev: EstadoFormulario, fd: FormData): 
     revalidatePath(`/despensas/${householdId}/miembros`);
     return exito("Invitación revocada. El enlace deja de funcionar ahora mismo.");
   } catch (err) {
-    if (err instanceof ErrorAutorizacion) return fallo(err.message);
+    const r = respuestaDeError(err);
+    if (r) return r;
     throw err;
   }
 }
@@ -230,7 +232,7 @@ export async function consultarInvitacion(token: string): Promise<DetalleInvitac
 
 export async function aceptarInvitacion(_prev: EstadoFormulario, fd: FormData): Promise<EstadoFormulario> {
   const token = String(fd.get("token") ?? "");
-  const sesion = await requireUsuario(`/invitacion/${encodeURIComponent(token)}`);
+  const sesion = await usuarioAccion();
 
   const ip = await clientIp();
   const cuota = await consumirCuota(`canjear:ip:${ip}`, CUOTAS.canjearInvitacionPorIp);
@@ -326,7 +328,7 @@ export async function cambiarRol(_prev: EstadoFormulario, fd: FormData): Promise
   const nuevo = rolParsed.data;
 
   try {
-    const ctx = await requireMiembro(householdId, "admin");
+    const ctx = await contextoAccion(householdId, "admin");
 
     if (userId === ctx.sesion.user.id) {
       return fallo("No puedes cambiar tu propio rol. Pídeselo a otro propietario.");
@@ -372,7 +374,8 @@ export async function cambiarRol(_prev: EstadoFormulario, fd: FormData): Promise
     revalidatePath(`/despensas/${householdId}/miembros`);
     return exito(`Rol actualizado a ${ETIQUETA_ROL[nuevo]}.`);
   } catch (err) {
-    if (err instanceof ErrorAutorizacion) return fallo(err.message);
+    const r = respuestaDeError(err);
+    if (r) return r;
     throw err;
   }
 }
@@ -383,7 +386,7 @@ export async function expulsarMiembro(_prev: EstadoFormulario, fd: FormData): Pr
   if (!householdId || !userId) return fallo("Faltan datos.");
 
   try {
-    const ctx = await requireMiembro(householdId, "admin");
+    const ctx = await contextoAccion(householdId, "admin");
 
     if (userId === ctx.sesion.user.id) {
       return fallo("Para salir tú mismo usa «Salir de la despensa».");
@@ -411,7 +414,8 @@ export async function expulsarMiembro(_prev: EstadoFormulario, fd: FormData): Pr
     revalidatePath(`/despensas/${householdId}/miembros`);
     return exito("Miembro retirado. Pierde el acceso de inmediato.");
   } catch (err) {
-    if (err instanceof ErrorAutorizacion) return fallo(err.message);
+    const r = respuestaDeError(err);
+    if (r) return r;
     throw err;
   }
 }

@@ -50,7 +50,7 @@ funcionando desde el primer momento.
 | `npm run seed`        | Datos de ejemplo                                            |
 | `npm run typecheck`   | TypeScript sin emitir                                       |
 | `npm run lint`        | ESLint                                                      |
-| `npm run prueba:humo` | Prueba end-to-end contra la instancia en marcha (64 checks) |
+| `npm run prueba:humo` | Prueba end-to-end contra la instancia en marcha (71 checks) |
 
 ---
 
@@ -126,6 +126,13 @@ hace y por qué.
 - Cookie `HttpOnly`, `Secure` y `SameSite`, con prefijo `__Host-` en producción
   (el navegador entonces sólo la acepta con HTTPS, `Path=/` y sin `Domain`, lo que
   impide que un subdominio comprometido plante una sesión).
+- Los atributos se ajustan al contexto, porque si no encajan el navegador
+  descarta la cookie **en silencio** y la sesión parece perderse en cada clic:
+  `Lax` sin `Secure` en `http://localhost`; `None` + `Secure` + `Partitioned`
+  cuando la app se sirve tras un proxy HTTPS y se ve empotrada; `Lax` en
+  producción sobre su propio dominio. El protocolo se deduce del anfitrión y no
+  de `x-forwarded-proto`, que el servidor de desarrollo de Next reescribe con
+  el del transporte local.
 - Caducidad **absoluta** de 30 días e **inactividad** de 7. Cambiar la contraseña
   cierra todas las demás sesiones, y la pantalla de cuenta permite cerrarlas una a
   una.
@@ -195,7 +202,8 @@ Conviene decirlo tan claro como lo anterior:
 
 La prueba de humo (`npm run prueba:humo`) comprueba en vivo buena parte de lo
 anterior: aislamiento entre despensas, CSRF, redirección abierta, permisos por
-rol, un solo uso de las invitaciones y el corte por cuota.
+rol, un solo uso de las invitaciones, el corte por cuota y los atributos con que
+se emite la cookie en cada contexto.
 
 ---
 

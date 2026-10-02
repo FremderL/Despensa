@@ -7,7 +7,7 @@ import { redirect } from "next/navigation";
 import { categories, getDb, itemBatches, items, locations, stockMovements, type Unidad } from "@/db";
 import { auditar } from "@/lib/audit";
 import { exito, fallo, valoresSeguros, type EstadoFormulario } from "@/lib/acciones";
-import { ErrorAutorizacion, requireMiembro } from "@/lib/authz";
+import { contextoAccion, respuestaDeError } from "@/lib/authz";
 import { newId } from "@/lib/crypto";
 import { CUOTAS, consumirCuota } from "@/lib/rate-limit";
 import {
@@ -104,7 +104,7 @@ export async function crearArticulo(_prev: EstadoFormulario, fd: FormData): Prom
   let itemId = "";
 
   try {
-    const ctx = await requireMiembro(d.householdId, "member");
+    const ctx = await contextoAccion(d.householdId, "member");
 
     const cuota = await consumirCuota(`escritura:${ctx.sesion.user.id}`, CUOTAS.escrituraPorUsuario);
     if (!cuota.permitido) return fallo("Vas demasiado rápido. Espera unos segundos.");
@@ -166,7 +166,8 @@ export async function crearArticulo(_prev: EstadoFormulario, fd: FormData): Prom
       });
     }
   } catch (err) {
-    if (err instanceof ErrorAutorizacion) return fallo(err.message);
+    const r = respuestaDeError(err);
+    if (r) return r;
     throw err;
   }
 
@@ -181,7 +182,7 @@ export async function editarArticulo(_prev: EstadoFormulario, fd: FormData): Pro
   const d = datos.data;
 
   try {
-    const ctx = await requireMiembro(d.householdId, "member");
+    const ctx = await contextoAccion(d.householdId, "member");
     const db = await getDb();
 
     if (!(await idValidoEnDespensa("categories", d.categoryId, d.householdId))) {
@@ -215,7 +216,8 @@ export async function editarArticulo(_prev: EstadoFormulario, fd: FormData): Pro
     revalidatePath(`/despensas/${d.householdId}`, "layout");
     return exito("Artículo actualizado.");
   } catch (err) {
-    if (err instanceof ErrorAutorizacion) return fallo(err.message);
+    const r = respuestaDeError(err);
+    if (r) return r;
     throw err;
   }
 }
@@ -226,7 +228,7 @@ export async function eliminarArticulo(_prev: EstadoFormulario, fd: FormData): P
   if (!householdId || !itemId) return fallo("Faltan datos.");
 
   try {
-    const ctx = await requireMiembro(householdId, "member");
+    const ctx = await contextoAccion(householdId, "member");
     const db = await getDb();
 
     const borrados = await db
@@ -243,7 +245,8 @@ export async function eliminarArticulo(_prev: EstadoFormulario, fd: FormData): P
       metadata: { nombre: borrados[0].name },
     });
   } catch (err) {
-    if (err instanceof ErrorAutorizacion) return fallo(err.message);
+    const r = respuestaDeError(err);
+    if (r) return r;
     throw err;
   }
 
@@ -262,7 +265,7 @@ export async function agregarLote(_prev: EstadoFormulario, fd: FormData): Promis
   const d = datos.data;
 
   try {
-    const ctx = await requireMiembro(d.householdId, "member");
+    const ctx = await contextoAccion(d.householdId, "member");
     const cuota = await consumirCuota(`escritura:${ctx.sesion.user.id}`, CUOTAS.escrituraPorUsuario);
     if (!cuota.permitido) return fallo("Vas demasiado rápido. Espera unos segundos.");
 
@@ -316,7 +319,8 @@ export async function agregarLote(_prev: EstadoFormulario, fd: FormData): Promis
     revalidatePath(`/despensas/${d.householdId}`, "layout");
     return exito("Lote añadido.");
   } catch (err) {
-    if (err instanceof ErrorAutorizacion) return fallo(err.message);
+    const r = respuestaDeError(err);
+    if (r) return r;
     throw err;
   }
 }
@@ -329,7 +333,7 @@ export async function consumirLote(_prev: EstadoFormulario, fd: FormData): Promi
   const d = datos.data;
 
   try {
-    const ctx = await requireMiembro(d.householdId, "member");
+    const ctx = await contextoAccion(d.householdId, "member");
     const db = await getDb();
 
     const [lote] = await db
@@ -399,7 +403,8 @@ export async function consumirLote(_prev: EstadoFormulario, fd: FormData): Promi
           : `Consumido. Quedan ${restante}.`,
     );
   } catch (err) {
-    if (err instanceof ErrorAutorizacion) return fallo(err.message);
+    const r = respuestaDeError(err);
+    if (r) return r;
     throw err;
   }
 }
@@ -412,7 +417,7 @@ export async function ajustarLote(_prev: EstadoFormulario, fd: FormData): Promis
   const d = datos.data;
 
   try {
-    const ctx = await requireMiembro(d.householdId, "member");
+    const ctx = await contextoAccion(d.householdId, "member");
     const db = await getDb();
 
     const [lote] = await db
@@ -460,7 +465,8 @@ export async function ajustarLote(_prev: EstadoFormulario, fd: FormData): Promis
     revalidatePath(`/despensas/${d.householdId}`, "layout");
     return exito("Cantidad ajustada.");
   } catch (err) {
-    if (err instanceof ErrorAutorizacion) return fallo(err.message);
+    const r = respuestaDeError(err);
+    if (r) return r;
     throw err;
   }
 }
@@ -471,7 +477,7 @@ export async function eliminarLote(_prev: EstadoFormulario, fd: FormData): Promi
   if (!householdId || !batchId) return fallo("Faltan datos.");
 
   try {
-    const ctx = await requireMiembro(householdId, "member");
+    const ctx = await contextoAccion(householdId, "member");
     const db = await getDb();
 
     const [lote] = await db
@@ -508,7 +514,8 @@ export async function eliminarLote(_prev: EstadoFormulario, fd: FormData): Promi
     revalidatePath(`/despensas/${householdId}`, "layout");
     return exito("Lote eliminado.");
   } catch (err) {
-    if (err instanceof ErrorAutorizacion) return fallo(err.message);
+    const r = respuestaDeError(err);
+    if (r) return r;
     throw err;
   }
 }
@@ -520,9 +527,10 @@ export async function agotarLote(_prev: EstadoFormulario, fd: FormData): Promise
   if (!householdId || !batchId) return fallo("Faltan datos.");
 
   try {
-    await requireMiembro(householdId, "member");
+    await contextoAccion(householdId, "member");
   } catch (err) {
-    if (err instanceof ErrorAutorizacion) return fallo(err.message);
+    const r = respuestaDeError(err);
+    if (r) return r;
     throw err;
   }
 

@@ -5,6 +5,7 @@ import { notFound, redirect } from "next/navigation";
 
 import { getDb, householdMembers, households } from "@/db";
 import { ETIQUETA_ROL, tienePermiso, type Rol } from "@/lib/catalogos";
+import { fallo, type EstadoFormulario } from "@/lib/acciones";
 import { sesionActual, type SesionActiva } from "@/lib/session";
 
 /**
@@ -29,6 +30,26 @@ export class ErrorAutorizacion extends Error {
     super(message);
     this.name = "ErrorAutorizacion";
   }
+}
+
+/** La sesión ya no vale: caducó, se revocó o nunca llegó la cookie. */
+export class ErrorSesion extends Error {
+  constructor(message = "Tu sesión caducó. Vuelve a iniciar sesión y repite la operación.") {
+    super(message);
+    this.name = "ErrorSesion";
+  }
+}
+
+/**
+ * Traduce los errores de acceso al formato que entiende el formulario.
+ *
+ * Devuelve `null` si el error no es de autorización, para que quien llama lo
+ * vuelva a lanzar: tragarse un error inesperado es peor que mostrarlo.
+ */
+export function respuestaDeError(err: unknown): EstadoFormulario | null {
+  if (err instanceof ErrorSesion) return fallo(err.message);
+  if (err instanceof ErrorAutorizacion) return fallo(err.message);
+  return null;
 }
 
 /** Exige sesión. Redirige al acceso conservando el destino. */
@@ -138,4 +159,44 @@ export async function contarPropietarios(householdId: string): Promise<number> {
     .from(householdMembers)
     .where(and(eq(householdMembers.householdId, householdId), eq(householdMembers.role, "owner")));
   return Number(fila?.n ?? 0);
+}
+
+/* -------------------------------------------------------------------------- */
+/*                        Variantes para server actions                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Las páginas pueden redirigir al acceso o devolver un 404: el usuario está
+ * navegando y entiende el cambio de pantalla.
+ *
+ * Una server action, en cambio, se dispara desde un formulario ya abierto. Si
+ * ahí redirigimos, lo que la persona percibe es que el botón "falló" y perdió
+ * lo que acababa de escribir. Estas variantes lanzan un error con mensaje para
+ * que el formulario lo muestre en su sitio, sin moverse de la página.
+ */
+export async function usuarioAccion(): Promise<SesionActiva> {
+  const sesion = await sesionActual();
+  if (!sesion) throw new ErrorSesion();
+  return sesion;
+}
+
+export async function contextoAccion(householdId: string, minimo: Rol = "viewer"): Promise<Contexto> {
+  const sesion = await usuarioAccion();
+
+  const miembro = await miembroOpcional(householdId, sesion.user.id);
+  if (!miembro) {
+    throw new ErrorAutorizacion("Ya no tienes acceso a esta despensa.");
+  }
+  if (!tienePermiso(miembro.rol, minimo)) {
+    throw new ErrorAutorizacion(
+      `Esta acción requiere el rol "${ETIQUETA_ROL[minimo]}" y el tuyo es "${ETIQUETA_ROL[miembro.rol]}".`,
+    );
+  }
+
+  return {
+    sesion,
+    rol: miembro.rol,
+    despensa: miembro.despensa,
+    puede: (m: Rol) => tienePermiso(miembro.rol, m),
+  };
 }

@@ -33,42 +33,81 @@ const REFRESCO_MS = 10 * 60 * 1000; // 10 minutos
 export const NOMBRE_COOKIE = env.isProd ? "__Host-despensa_sesion" : "despensa_sesion";
 
 /**
- * ¿La petición llegó por HTTPS?
+ * Averigua cómo debe emitirse la cookie para que el navegador la acepte.
  *
- * Importa porque `Secure` y `SameSite=None` sólo son válidos sobre TLS. En
- * producción siempre lo es (Render termina TLS y marca `x-forwarded-proto`).
- * En desarrollo puede ser http://localhost o la vista previa por HTTPS, y la
- * cookie tiene que adaptarse a cada caso o el navegador la descarta.
+ * No es un detalle menor: si los atributos no encajan con el contexto, el
+ * navegador descarta la cookie en silencio, sin ningún error en el servidor,
+ * y la sesión parece "perderse" en cada navegación.
+ *
+ * Tres escenarios y lo que exige cada uno:
+ *
+ *   1. `http://localhost` en desarrollo → `Secure` haría que se descartase y
+ *      `SameSite=None` sin `Secure` es inválido. Toca `Lax` sin `Secure`.
+ *   2. Vista previa por HTTPS dentro de un iframe de otro dominio → con `Lax`
+ *      la cookie no viaja, porque el sitio de nivel superior no es el nuestro.
+ *      Hacen falta `None` + `Secure`, y además `Partitioned`, que es lo que
+ *      permite a Chrome aceptarla pese al bloqueo de cookies de terceros: la
+ *      guarda aislada por sitio contenedor.
+ *   3. Producción en su propio dominio → `Lax`, lo más estricto que sigue
+ *      funcionando, y sin depender de cookies de terceros.
  */
-async function esHttps(): Promise<boolean> {
-  if (env.isProd) return true;
+async function contextoCookie(): Promise<{ https: boolean; empotrada: boolean }> {
+  if (env.isProd) {
+    // Render termina TLS por nosotros; el tráfico hasta el usuario es HTTPS.
+    return { https: true, empotrada: env.ALLOW_IFRAME_EMBEDDING };
+  }
+
   const h = await headers();
-  const proto = h.get("x-forwarded-proto");
-  if (proto) return proto.split(",")[0].trim() === "https";
-  return env.APP_URL.startsWith("https://");
+  const proto = h.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+  const host = (h.get("x-forwarded-host") ?? h.get("host") ?? "").split(",")[0]!.trim();
+  const esLocal = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?$/i.test(host);
+
+  /**
+   * `x-forwarded-proto` sólo sirve como señal POSITIVA.
+   *
+   * El servidor de desarrollo de Next escribe esa cabecera con el protocolo
+   * del transporte local, que es `http` incluso cuando un proxy delante
+   * terminó TLS. Fiarse de ella para descartar HTTPS dejaba la cookie mal
+   * configurada justo en la vista previa, que es donde se usa la aplicación.
+   *
+   * El anfitrión sí distingue: cualquier nombre que no sea local ha llegado
+   * a través del proxy, y ese proxy sirve por HTTPS.
+   */
+  const https = proto === "https" || (!esLocal && host !== "");
+
+  // Fuera de producción, HTTPS implica que venimos del proxy de vista previa,
+  // que muestra la aplicación empotrada en otro sitio.
+  return { https, empotrada: https };
 }
 
 async function opcionesCookie(expira: Date) {
-  const https = await esHttps();
+  const { https, empotrada } = await contextoCookie();
 
   return {
     // Invisible para JavaScript: un XSS no puede leer la sesión.
     httpOnly: true,
-    // Sólo viaja cifrada. Sobre http de desarrollo hay que desactivarlo o el
-    // navegador rechazaría la cookie entera.
     secure: https,
-    /**
-     * En producción `lax`: la cookie no acompaña a peticiones nacidas en otro
-     * sitio, lo que corta la mayoría de CSRF. Sobre la vista previa en HTTPS
-     * la app vive en un iframe de otro dominio, donde `lax` bloquearía la
-     * cookie; ahí hace falta `none`, que exige Secure.
-     *
-     * La defensa que siempre actúa es la verificación de Origin del
-     * middleware; SameSite es la segunda capa.
-     */
-    sameSite: env.isProd ? ("lax" as const) : https ? ("none" as const) : ("lax" as const),
+    sameSite: empotrada ? ("none" as const) : ("lax" as const),
+    // `Partitioned` sólo es válido junto a SameSite=None y Secure.
+    partitioned: empotrada ? true : undefined,
     path: "/",
     expires: expira,
+  };
+}
+
+/**
+ * Al borrar hay que repetir exactamente los mismos atributos: una cookie
+ * emitida como `Partitioned` no se elimina con un borrado sin ese atributo.
+ */
+async function opcionesBorrado() {
+  const { https, empotrada } = await contextoCookie();
+  return {
+    httpOnly: true,
+    secure: https,
+    sameSite: empotrada ? ("none" as const) : ("lax" as const),
+    partitioned: empotrada ? true : undefined,
+    path: "/",
+    maxAge: 0,
   };
 }
 
@@ -169,7 +208,7 @@ export async function sesionActual(): Promise<SesionActiva | null> {
 export async function cerrarSesion(): Promise<string | null> {
   const store = await cookies();
   const token = store.get(NOMBRE_COOKIE)?.value;
-  store.delete(NOMBRE_COOKIE);
+  store.set(NOMBRE_COOKIE, "", await opcionesBorrado());
   if (!token) return null;
 
   const db = await getDb();

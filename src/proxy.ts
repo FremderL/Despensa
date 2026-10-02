@@ -152,7 +152,18 @@ export default function proxy(req: NextRequest) {
   /* 2 · Desvíos por sesión (sólo comodidad) -------------------------------- */
   const conCookie = tieneCookieSesion(req);
 
-  if (!conCookie && RUTAS_PRIVADAS.some((r) => r.test(pathname))) {
+  /**
+   * El desvío sólo se aplica a navegaciones, nunca a una escritura.
+   *
+   * Si una server action se encuentra sin cookie, es mejor dejarla correr: se
+   * encontrará con la sesión caducada y devolverá un mensaje dentro del
+   * formulario. Redirigir aquí convertiría ese caso en un salto de página que
+   * la persona vive como "el botón falló", perdiendo lo que acababa de
+   * escribir.
+   */
+  const esNavegacion = METODOS_SEGUROS.has(req.method);
+
+  if (esNavegacion && !conCookie && RUTAS_PRIVADAS.some((r) => r.test(pathname))) {
     const url = req.nextUrl.clone();
     url.pathname = "/ingresar";
     url.search = "";
@@ -160,7 +171,7 @@ export default function proxy(req: NextRequest) {
     return aplicarCabeceras(NextResponse.redirect(url), nonce);
   }
 
-  if (conCookie && RUTAS_PUBLICAS_AUTH.some((r) => r.test(pathname))) {
+  if (esNavegacion && conCookie && RUTAS_PUBLICAS_AUTH.some((r) => r.test(pathname))) {
     const url = req.nextUrl.clone();
     url.pathname = "/despensas";
     url.search = "";

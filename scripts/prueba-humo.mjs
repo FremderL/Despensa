@@ -47,10 +47,14 @@ function seccion(t) {
 const IP_BASE = `198.51.100.${1 + Math.floor(Math.random() * 250)}`;
 
 class Cliente {
-  constructor(nombre, ip = IP_BASE) {
+  constructor(nombre, ip = IP_BASE, host = null) {
     this.nombre = nombre;
     this.ip = ip;
+    /** Simula `x-forwarded-host`, como haría un proxy delante de la app. */
+    this.host = host;
     this.cookies = new Map();
+    /** Última cabecera Set-Cookie de sesión, para poder inspeccionarla. */
+    this.ultimaCookieCruda = null;
   }
 
   #cabeceraCookie() {
@@ -59,6 +63,7 @@ class Cliente {
 
   #guardarCookies(res) {
     for (const linea of res.headers.getSetCookie?.() ?? []) {
+      if (linea.includes("despensa_sesion")) this.ultimaCookieCruda = linea;
       const [par] = linea.split(";");
       const i = par.indexOf("=");
       const nombre = par.slice(0, i).trim();
@@ -72,6 +77,7 @@ class Cliente {
     const cabeceras = {
       "user-agent": "prueba-humo/1.0",
       "x-forwarded-for": this.ip,
+      ...(this.host ? { "x-forwarded-host": this.host } : {}),
       ...(opciones.headers ?? {}),
     };
     const galleta = this.#cabeceraCookie();
@@ -509,6 +515,75 @@ async function main() {
       });
       const tras = await ana.get(`/despensas/${hid2}`);
       check("con el nombre exacto sí se borra", tras.status === 404, `status ${tras.status}`);
+    }
+  }
+
+  /* 14 · La sesión detrás de un proxy (vista previa en iframe) -------------- */
+  seccion("14 · Cookie de sesión según el contexto");
+
+  /**
+   * Regresión real: la cookie salía `Lax` sin `Secure` cuando la aplicación
+   * se servía tras el proxy de vista previa, así que el navegador la
+   * descartaba dentro del iframe y la sesión se perdía en cada navegación.
+   *
+   * El servidor de desarrollo de Next reescribe `x-forwarded-proto` con el
+   * protocolo del transporte local (`http`), de modo que esa cabecera no
+   * sirve para detectar HTTPS: hay que mirar el anfitrión.
+   */
+  const local = new Cliente("local", `198.51.100.${1 + Math.floor(Math.random() * 250)}`);
+  await entrar(local, "ana@ejemplo.com", CLAVE_DEMO);
+  const cookieLocal = local.ultimaCookieCruda ?? "";
+  check("en localhost la cookie es Lax y sin Secure",
+    /SameSite=lax/i.test(cookieLocal) && !/;\s*Secure/i.test(cookieLocal), cookieLocal);
+  check("y siempre HttpOnly", /HttpOnly/i.test(cookieLocal), cookieLocal);
+
+  const tunel = new Cliente(
+    "vista-previa",
+    `198.51.100.${1 + Math.floor(Math.random() * 250)}`,
+    "3000-pruebadehumo.e2b.app",
+  );
+  await entrar(tunel, "ana@ejemplo.com", CLAVE_DEMO);
+  const cookieTunel = tunel.ultimaCookieCruda ?? "";
+  check("tras un proxy la cookie es SameSite=None", /SameSite=none/i.test(cookieTunel), cookieTunel);
+  check("…con Secure", /;\s*Secure/i.test(cookieTunel), cookieTunel);
+  check("…y Partitioned, para que Chrome la acepte en un iframe",
+    /Partitioned/i.test(cookieTunel), cookieTunel);
+
+  const tras1 = await tunel.get("/despensas");
+  const tras2 = await tunel.get("/cuenta");
+  check("la sesión sobrevive a varias navegaciones tras el proxy",
+    tras1.body.includes("Mis despensas") && tras2.body.includes("Sesiones activas"),
+    `${tras1.status}/${tras2.status}`);
+
+  /* 15 · Escrituras sin acceso: mensaje, no pantalla de error ---------------- */
+  seccion("15 · Escritura sobre una despensa ajena");
+  if (hid) {
+    const intrusa = new Cliente("intrusa", `198.51.100.${1 + Math.floor(Math.random() * 250)}`);
+    await entrar(intrusa, "sofia@ejemplo.com", CLAVE_DEMO);
+
+    // Sofía sí es miembro de la despensa sembrada, así que usamos un id ajeno.
+    const inventada = "00000000-0000-4000-8000-000000000000";
+    const formInv = Cliente.formularioCon(
+      (await ana.get(`/despensas/${hid}/inventario/nuevo`)).body,
+      "name",
+      "quantity",
+    );
+
+    if (formInv) {
+      const r = await intrusa.accion(`/despensas/${hid}/inventario/nuevo`, {
+        ...formInv,
+        householdId: inventada,
+        name: "Intento no autorizado",
+        unit: "unidad",
+        minQuantity: "0",
+        quantity: "1",
+        expiryType: "caducidad",
+      });
+      check(
+        "se responde con un mensaje claro y no con una pantalla de error",
+        r.body.includes("Ya no tienes acceso") || r.body.includes("no existe"),
+        r.body.match(/Algo salió mal|Ya no tienes acceso|no existe/)?.[0] ?? "(nada)",
+      );
     }
   }
 
