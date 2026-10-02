@@ -283,6 +283,24 @@ Las secciones que dependen de los datos de ejemplo fallarán contra una base
 vacía; las de cabeceras, CSRF, redirección abierta y cuotas son válidas en
 cualquier entorno.
 
+### Si algo no cuadra en desarrollo
+
+**Rutas que devuelven 404 sin motivo.** `next build` y `next dev` comparten la
+carpeta `.next`, y el manifiesto que deja la compilación puede confundir al
+servidor de desarrollo: las rutas estáticas pasan a resolverse como dinámicas
+(`/inventario/nuevo` acaba tratándose como un artículo con id `nuevo`). Si has
+compilado y luego arrancas `dev`, borra la carpeta antes:
+
+```bash
+rm -rf .next && npm run dev
+```
+
+**La sesión no se guarda.** Mira los atributos de la cookie en las herramientas
+del navegador. Dentro de un iframe hace falta la variante
+`despensa_sesion_emb`, que es la que lleva `Partitioned`. Safari bloquea todas
+las cookies de terceros, así que ahí la aplicación empotrada no mantendrá la
+sesión: ábrela en una pestaña propia.
+
 ---
 
 ## Modelo de datos
