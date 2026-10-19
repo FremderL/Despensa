@@ -13,7 +13,8 @@
     "db:reset": "rm -rf .data/pglite && tsx src/db/migrate.ts",
     "typecheck": "tsc --noEmit",
     "seed": "tsx src/db/seed.ts",
-    "prueba:humo": "node scripts/prueba-humo.mjs"
+    "prueba:humo": "node scripts/prueba-humo.mjs",
+    "dev:preview": "npm run db:migrate && npm run seed && next dev -H 0.0.0.0 -p 3000"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.2.1",
